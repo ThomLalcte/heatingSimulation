@@ -1,119 +1,145 @@
 from matplotlib import pyplot as plt
-import numpy as np, random, matplotlib.animation as animation
+import numpy as np, random, matplotlib.animation as animation, json
 
+
+class cell:
+
+    class cellType:
+        heatSink = 1
+        conductor = 2
+
+    def __init__(self, id, x, y, temp, resistance, capacity, type):
+        self.id:int = id
+        self.x:int = x
+        self.y:int = y
+        self.temp:float = temp+random.gauss(0,0.1) # in Kelvin
+        self.resistance:float = resistance # in Kelvin/Watt
+        self.capacity:float = capacity # in Joules/Kelvin
+        self.neighbors:list = []
+        self.type:int = type
+
+    def injectHeat(self, joules):
+        self.temp += joules / self.capacity
+
+    def exchangeHeat(self, timeStep, sourceTemp, sourceResistance):
+        if sourceTemp < self.temp:
+            return 0
+        joules = (sourceTemp - self.temp) / (sourceResistance + self.resistance) * timeStep
+        if self.type == self.cellType.conductor:
+            self.injectHeat(joules)
+        return joules
+    
+    def transferHeat(self, timeStep):
+        # pick a random order for the neighbors
+        order = random.sample(range(len(self.neighbors)), len(self.neighbors))
+        for neighbor in order:
+            transfer = self.neighbors[neighbor].exchangeHeat(timeStep, self.temp, self.resistance)
+            self.injectHeat(-transfer)
+
+    def toDict(self):
+        return {
+            "x": self.x,
+            "y": self.y,
+            "temp": self.temp,
+            "resistance": self.resistance,
+            "capacity": self.capacity,
+            "type": self.type
+        }
+
+class thermometer:
+    def __init__(self, x, y, room):
+        self.x = x
+        self.y = y
+        self.room = room
+        self.temp = None
+
+    def getTemp(self):
+        return self.room.getTemp(self.x, self.y)
+
+class heater:
+    def __init__(self, x, y, room, power, p, i, setpoint, sensor):
+        self.x = x
+        self.y = y
+        self.room = room
+        self.power = power
+        self.p = p
+        self.i = i
+        self.integral = 0
+        self.lastError = 0
+        self.setpoint = setpoint
+        self.sensor = sensor
+    
+    def update(self):
+        error = self.setpoint - self.sensor.getTemp()
+        self.integral += error * self.room.timeStep
+        self.power = self.p*error + self.i*self.integral
+        self.power = min(max(self.power, 0),1000)
 
 class room:
     def __init__(self, width, height, timeStep):
         self.width = width # in meters
         self.height = height # in meters
         self.timeStep = timeStep # in seconds
-        self.cells = []
-        self.heatSource = None
-        self.sensor = None
+        self.cells:list[cell] = []
+        self.heatSources:list[heater] = []
+        self.heatSourcesIds:list[int] = []
+        self.sensors:list[thermometer] = []
+        self.sensorsIds:list[int] = []
 
-    class thermometer:
-        def __init__(self, x, y, room):
-            self.x = x
-            self.y = y
-            self.room = room
-            self.temp = None
-
-        def getTemp(self):
-            return self.room.getTemp(self.x, self.y)
-
-    class heater:
-        def __init__(self, x, y, room, p, i, setpoint, sensor):
-            self.x = x
-            self.y = y
-            self.room = room
-            self.power = 0
-            self.p = p
-            self.i = i
-            self.integral = 0
-            self.lastError = 0
-            self.setpoint = setpoint
-            self.sensor = sensor
-        
-        def update(self):
-            error = self.setpoint - self.sensor.getTemp()
-            self.integral += error * self.room.timeStep
-            self.power = self.p*error + self.i*self.integral
-            self.power = min(max(self.power, 0),1000)
-
-    class cell:
-
-        class cellType:
-            heatSource = 0
-            heatSink = 1
-            conductor = 2
-
-        def __init__(self, x, y, temp, resistance, capacity, type):
-            self.x = x
-            self.y = y
-            self.temp = temp+random.gauss(0,0.1) # in Kelvin
-            self.resistance = resistance # in Kelvin/Watt
-            self.capacity = capacity # in Joules/Kelvin
-            self.neighbors = []
-            self.type = type
-
-        def injectHeat(self, joules):
-            self.temp += joules / self.capacity
-
-        def exchangeHeat(self, timeStep, sourceTemp, sourceResistance):
-            if sourceTemp < self.temp:
-                return 0
-            joules = (sourceTemp - self.temp) / (sourceResistance + self.resistance) * timeStep
-            if self.type == self.cellType.conductor:
-                self.injectHeat(joules)
-            return joules
-        
-        def transferHeat(self, timeStep):
-            # pick a random order for the neighbors
-            order = random.sample(range(len(self.neighbors)), len(self.neighbors))
-            for neighbor in order:
-                transfer = self.neighbors[neighbor].exchangeHeat(timeStep, self.temp, self.resistance)
-                self.injectHeat(-transfer)
-    
     def initCells(self,
                  innerTemp, innerResistance, innerCapacity, 
                  wallResistance, wallCapacity,
                  outerTemp, outerResistance, outerCapacity):
-        for x in range(self.width+4):
-                for y in range(self.height+4):
-                    if x == 0 or x == self.width+4 or y == 0 or y == self.height+4:
-                        self.cells.append(self.cell(x, y, outerTemp, outerResistance, outerCapacity, self.cell.cellType.heatSink))
-                    elif x == 1 or x == self.width+2 or y == 1 or y == self.height+2:
-                        self.cells.append(self.cell(x, y, (innerTemp-outerTemp)*(wallResistance/(innerTemp+2*wallResistance)) , wallResistance, wallCapacity, self.cell.cellType.conductor))
-                    elif x == self.width//2+2 and y == self.height//2+2:
-                        self.cells.append(self.cell(x, y, innerTemp, innerResistance, innerCapacity, self.cell.cellType.heatSource))
+        id = 0
+        for x in range(self.height+4):
+                for y in range(self.width+4):
+                    if x == 0 or x == self.height+3 or y == 0 or y == self.width+3:
+                        self.cells.append(cell(id, y, x, outerTemp, outerResistance, outerCapacity, cell.cellType.heatSink))
+                    elif x == 1 or x == self.height+2 or y == 1 or y == self.width+2:
+                        self.cells.append(cell(id, y, x, (innerTemp-outerTemp)*(wallResistance/(innerTemp+2*wallResistance)) , wallResistance, wallCapacity, cell.cellType.conductor))
                     else:
-                        self.cells.append(self.cell(x, y, innerTemp, innerResistance, innerCapacity, self.cell.cellType.conductor))
-        for x in range(self.width+4):
-            for y in range(self.height+4):
+                        self.cells.append(cell(id, y, x, innerTemp, innerResistance, innerCapacity, cell.cellType.conductor))
+                    id += 1
+        for x in range(1,self.width+1): # TODO: debug the neighbors creation
+            for y in range(1,self.height+1):
                 selectedCell = self.getCell(x, y)
-                if x > 0:
-                    selectedCell.neighbors.append(self.getCell(x-1, y))
-                if x < self.width+3:
-                    selectedCell.neighbors.append(self.getCell(x+1, y))
-                if y > 0:
-                    selectedCell.neighbors.append(self.getCell(x, y-1))
-                if y < self.height+3:
-                    selectedCell.neighbors.append(self.getCell(x, y+1))
+                # if x > 0:
+                selectedCell.neighbors.append(self.getCell(x-1, y))
+                # if x < self.height+4:
+                selectedCell.neighbors.append(self.getCell(x+1, y))
+                # if y > 0:
+                selectedCell.neighbors.append(self.getCell(x, y-1))
+                # if y < self.width+4:
+                selectedCell.neighbors.append(self.getCell(x, y+1))
                     
     def getCell(self, x, y):
-        return self.cells[x*(self.width+4) + y]
+        return self.cells[x + y*(self.width+4)]
+
+    def addHeatSource(self,id, x, y, power, p, i, setpoint, sensor):
+        self.heatSourcesIds.append(id)
+        self.heatSources.append(heater(x, y, self, power, p, i, setpoint, sensor))
+
+    def addSensor(self, id, x, y):
+        self.sensorsIds.append(id)
+        self.sensors.append(thermometer(x, y, self))
 
     def transferHeat(self):
         # get temperature sorted cells indexs
         sortIndex = np.argsort([cell.temp for cell in self.cells])
 
-        self.heatSource.update()
+        for heatSource in self.heatSources:
+            heatSource.update()
 
         for cell in range(len(self.cells)-1,0,-1):
+            selectedCell:cell = self.cells[sortIndex[cell]]
             # self.highlightCellNeighbors(self.cells[sortIndex[cell]].x, self.cells[sortIndex[cell]].y)
-            if self.cells[sortIndex[cell]].type == self.cell.cellType.heatSource:
-                self.cells[sortIndex[cell]].injectHeat(self.heatSource.power*self.timeStep)
-            self.cells[sortIndex[cell]].transferHeat(self.timeStep)
+            if selectedCell.id in self.heatSourcesIds:
+                # get the heat source id
+                heatSourceId = self.heatSourcesIds.index(selectedCell.id)
+                # get the heat source
+                heatSource = self.heatSources[heatSourceId]
+                selectedCell.injectHeat(heatSource.power*self.timeStep)
+            selectedCell.transferHeat(self.timeStep)
 
     def getTemp(self, x, y):
         cell = self.getCell(x, y)
@@ -154,7 +180,39 @@ class room:
         for i in range(len(selectedCell.neighbors)):
             selectedCell.neighbors[i].temp = trueTemps[i]
 
-def main():
+    def drawFeatures(self):
+        image = np.zeros((self.width+4, self.height+4, 3))
+        for x in range(self.width+4):
+            for y in range(self.height+4):
+                if self.getCell(x, y).type == cell.cellType.heatSink:
+                    image[x, y] = (0, 0, 1)
+                elif self.getCell(x, y).type == cell.cellType.conductor:
+                    image[x, y] = (0, 1, 0)
+
+        for sensor in self.sensors:
+            image[sensor.x, sensor.y] = (1, 1, 0)
+
+        for heatSource in self.heatSources:
+            image[heatSource.x, heatSource.y] = (1, 0, 1)
+
+        image = np.flipud(np.rot90(image))
+        plt.imshow(image)
+        plt.show()
+
+    def toDict(self):
+        out = {
+            "width": self.width,
+            "height": self.height,
+            "timeStep": self.timeStep,
+            "cells": [cell.__dict__() for cell in self.cells]
+        }
+
+    def saveRoom(self, path):
+        with open(path, "w") as f:
+            pass
+
+def simulate():
+
     # airCapacity = 20.79*88.08 # Joules/Kelvin
     airCapacity = 200 # Joules/Kelvin
     setpoint = 21 # Kelvin
@@ -166,19 +224,23 @@ def main():
     # for setpoint in range(0,101,5):
 
     timeStep = 10 # in seconds
-    testroom = room(5, 7, timeStep)
+    testroom = room(5, 5, timeStep)
     testroom.initCells(
         setpoint, *air,
         3, 100,
         0, *air)
     
-    testroom.sensor = testroom.thermometer(testroom.width//2+2, 2, testroom)
-    testroom.heatSource = testroom.heater(testroom.width//2+2, testroom.height//2+2, testroom, 30, 0.03, setpoint, testroom.sensor)
+    sensorCell = testroom.getCell(testroom.width//2+2, 2)
+    testroom.addSensor(sensorCell.id, sensorCell.x, sensorCell.y)
+    heaterCell = testroom.getCell(testroom.width//2+2, testroom.height//2+2)
+    testroom.addHeatSource(heaterCell.id, heaterCell.x, heaterCell.y, 1000, 10, 0.2, setpoint, testroom.sensors[0])
 
-    heaterSensor = testroom.thermometer(testroom.width//2+2, testroom.height//2+2, testroom)
     # for i in range(5):
     #     testroom.highlightCellNeighbors(2+i, 0)
 
+    # testroom.drawFeatures()
+
+    testroom.saveRoom("room.json")
 
     # totalJoules = []
     temperatureOverTime = []
@@ -190,8 +252,8 @@ def main():
         testroom.transferHeat()
         # totalJoules.append(testroom.getSummedTemp())
         temperatureOverTime.append(testroom.getInnerTemp())
-        heaterTemperatureOverTime.append(heaterSensor.getTemp())
-        heaterPowerOverTime.append(testroom.heatSource.power)
+        heaterTemperatureOverTime.append(testroom.heatSources[0].sensor.getTemp())
+        heaterPowerOverTime.append(testroom.heatSources[0].power)
         if i % 10 == 0:
             temperatureMap.append(testroom.getTemperatureMap())
 
@@ -225,6 +287,9 @@ def main():
     #     f.write("setpoint,steady state power\n")
     #     for i in range(len(setpoints)):
     #         f.write(f"{setpoints[i]};{steadyStatePowers[i]}\n".replace(".",","))
+
+def main():
+    simulate()
 
 if __name__ == "__main__":
     main()
