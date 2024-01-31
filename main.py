@@ -41,7 +41,6 @@ class cell:
             interactions.append([transfer, self.neighbors[neighbor].id])
         return interactions
 
-
     def toDict(self):
         return {
             "x": self.x,
@@ -60,7 +59,7 @@ class thermometer:
         self.temp = None
 
     def getTemp(self):
-        return self.room.getTemp(self.x, self.y)
+        return self.room.getTemp(self.x, self.y)+random.gauss(0,0.05)
 
 class heater:
     def __init__(self, x, y, room, power, p, i, setpoint, sensor):
@@ -99,11 +98,11 @@ class room:
                  wallResistance, wallCapacity,
                  outerTemp, outerResistance, outerCapacity):
         id = 0
-        for x in range(self.height+4):
-                for y in range(self.width+4):
-                    if x == 0 or x == self.height+3 or y == 0 or y == self.width+3:
+        for x in range(self.width+4):
+                for y in range(self.height+4):
+                    if x == 0 or x == self.width+3 or y == 0 or y == self.height+3:
                         self.cells.append(cell(id, x, y, outerTemp, outerResistance, outerCapacity, cell.cellType.heatSink))
-                    elif x == 1 or x == self.height+2 or y == 1 or y == self.width+2:
+                    elif x == 1 or x == self.width+2 or y == 1 or y == self.height+2:
                         self.cells.append(cell(id, x, y, (innerTemp-outerTemp)*(wallResistance/(innerTemp+2*wallResistance)) , wallResistance, wallCapacity, cell.cellType.conductor))
                     else:
                         self.cells.append(cell(id, x, y, innerTemp, innerResistance, innerCapacity, cell.cellType.conductor))
@@ -113,23 +112,33 @@ class room:
             y = selectedCell.y
             if x > 0:
                 selectedCell.neighbors.append(self.getCell(x-1, y))
-            if x < self.height+3:
+            if x < self.width+3:
                 selectedCell.neighbors.append(self.getCell(x+1, y))
             if y > 0:
                 selectedCell.neighbors.append(self.getCell(x, y-1))
-            if y < self.width+3:
+            if y < self.height+3:
                 selectedCell.neighbors.append(self.getCell(x, y+1))
                     
     def getCell(self, x, y):
-        return self.cells[x*(self.width+4) + y]
+        return self.cells[x*(self.height+4) + y]
 
-    def addHeatSource(self,id, x, y, power, p, i, setpoint, sensor):
-        self.heatSourcesIds.append(id)
+    def addHeatSource(self, id, power, p, i, setpoint, sensor):
+        selectedCell = self.cells[id]
+        return self.addHeatSourceFromXY(selectedCell.x, selectedCell.y, power, p, i, setpoint, sensor)
+
+    def addHeatSourceFromXY(self, x, y, power, p, i, setpoint, sensor):
+        self.heatSourcesIds.append(self.getCell(x,y).id)
         self.heatSources.append(heater(x, y, self, power, p, i, setpoint, sensor))
+        return self.heatSources[-1]
 
-    def addSensor(self, id, x, y):
-        self.sensorsIds.append(id)
+    def addSensor(self, id):
+        selectedCell = self.cells[id]
+        return self.addSensorFromXY(selectedCell.x, selectedCell.y)
+
+    def addSensorFromXY(self, x, y):
+        self.sensorsIds.append(self.getCell(x,y).id)
         self.sensors.append(thermometer(x, y, self))
+        return self.sensors[-1]
 
     def transferHeat(self):
         # get temperature sorted cells indexs from hottest to coldest
@@ -255,6 +264,22 @@ class room:
                 lines.append(self.plotAxis.arrow(source.x, source.y, destination.x-source.x, destination.y-source.y, head_width=scaledTransfer, head_length=scaledTransfer, fc='orange', ec='orange', linewidth=scaledTransfer*3, length_includes_head=True))
         return lines        
 
+    def drawFeatures(self):
+        if self.plotFigure == None:
+            self.initPlot()
+        for cell in self.cells:
+            if cell.type == cell.cellType.heatSink:
+                self.plotAxis.scatter(cell.x, cell.y, 100, "blue", marker="s")
+            elif cell.type == cell.cellType.conductor:
+                self.plotAxis.scatter(cell.x, cell.y, 100, "orange", marker="s")
+        for heatSource in self.heatSources:
+            self.plotAxis.scatter(heatSource.x, heatSource.y, 50, "red", marker="s")
+        for sensor in self.sensors:
+            self.plotAxis.scatter(sensor.x, sensor.y, 50, "purple", marker="s")
+        
+        self.plotFigure.show()
+        plt.pause(0.1)
+
     def toDict(self):
         out = {
             "width": self.width,
@@ -279,12 +304,17 @@ def simulate():
     # for setpoint in range(0,101,5):
 
     timeStep = 10 # in seconds
-    testroom = room(5, 5, timeStep)
-    testroom.initCells(setpoint, *air, 3, 100, 0, *air)
+    testroom = room(15, 5, timeStep)
+    testroom.initCells(20, *air, 3, 100, 0, *air)
+
+    testSensor = testroom.addSensorFromXY(testroom.width//2+2, 2)
+    testroom.addHeatSourceFromXY(testroom.width//2+2, testroom.height//2+2, 1000, 10, 0.01, setpoint, testSensor)
     
     testroom.labelCells()
+    testroom.drawFeatures()
     plt.show(block=False)
     plt.pause(0.1)
+
 
     # for cell in testroom.cells:
     #     points = testroom.highlightCellNeighbors(cell.id)
@@ -292,10 +322,6 @@ def simulate():
     #     for point in points:
     #         point.remove()
 
-    sensorCell = testroom.getCell(testroom.width//2+2, 2)
-    testroom.addSensor(sensorCell.id, sensorCell.x, sensorCell.y)
-    heaterCell = testroom.getCell(testroom.width//2+2, testroom.height//2+2)
-    testroom.addHeatSource(heaterCell.id, heaterCell.x, heaterCell.y, 1000, 30, 0.1, setpoint, testroom.sensors[0])
 
     # for i in range(5):
     #     testroom.highlightCellNeighbors(2+i, 0)
@@ -319,9 +345,9 @@ def simulate():
 
 
     imFigure, imAxis = plt.subplots()
-    image = imAxis.imshow(temperatureMap[0], cmap='hot', interpolation='nearest')
+    image = imAxis.imshow(temperatureMap[0].T, cmap='hot', interpolation='nearest')
     def update(frame):
-        image.set_data(temperatureMap[frame])
+        image.set_data(temperatureMap[frame].T)
         return image
     ani = animation.FuncAnimation(imFigure, update, frames=range(simulationTime//10), interval=10)
 
