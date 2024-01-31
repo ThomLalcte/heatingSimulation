@@ -85,6 +85,7 @@ class room:
         self.heatSourcesIds:list[int] = []
         self.sensors:list[thermometer] = []
         self.sensorsIds:list[int] = []
+        self.plotFigure, self.plotAxis = plt.subplots()
 
     def initCells(self,
                  innerTemp, innerResistance, innerCapacity, 
@@ -94,26 +95,26 @@ class room:
         for x in range(self.height+4):
                 for y in range(self.width+4):
                     if x == 0 or x == self.height+3 or y == 0 or y == self.width+3:
-                        self.cells.append(cell(id, y, x, outerTemp, outerResistance, outerCapacity, cell.cellType.heatSink))
+                        self.cells.append(cell(id, x, y, outerTemp, outerResistance, outerCapacity, cell.cellType.heatSink))
                     elif x == 1 or x == self.height+2 or y == 1 or y == self.width+2:
-                        self.cells.append(cell(id, y, x, (innerTemp-outerTemp)*(wallResistance/(innerTemp+2*wallResistance)) , wallResistance, wallCapacity, cell.cellType.conductor))
+                        self.cells.append(cell(id, x, y, (innerTemp-outerTemp)*(wallResistance/(innerTemp+2*wallResistance)) , wallResistance, wallCapacity, cell.cellType.conductor))
                     else:
-                        self.cells.append(cell(id, y, x, innerTemp, innerResistance, innerCapacity, cell.cellType.conductor))
+                        self.cells.append(cell(id, x, y, innerTemp, innerResistance, innerCapacity, cell.cellType.conductor))
                     id += 1
-        for x in range(1,self.width+1): # TODO: debug the neighbors creation
-            for y in range(1,self.height+1):
-                selectedCell = self.getCell(x, y)
-                # if x > 0:
+        for selectedCell in self.cells:
+            x = selectedCell.x
+            y = selectedCell.y
+            if x > 0:
                 selectedCell.neighbors.append(self.getCell(x-1, y))
-                # if x < self.height+4:
+            if x < self.height+2:
                 selectedCell.neighbors.append(self.getCell(x+1, y))
-                # if y > 0:
+            if y > 0:
                 selectedCell.neighbors.append(self.getCell(x, y-1))
-                # if y < self.width+4:
+            if y < self.width+2:
                 selectedCell.neighbors.append(self.getCell(x, y+1))
                     
     def getCell(self, x, y):
-        return self.cells[x + y*(self.width+4)]
+        return self.cells[x*(self.width+4) + y]
 
     def addHeatSource(self,id, x, y, power, p, i, setpoint, sensor):
         self.heatSourcesIds.append(id)
@@ -124,19 +125,22 @@ class room:
         self.sensors.append(thermometer(x, y, self))
 
     def transferHeat(self):
-        # get temperature sorted cells indexs
-        sortIndex = np.argsort([cell.temp for cell in self.cells])
+        # get temperature sorted cells indexs from hottest to coldest
+        sortIndex = np.argsort([cell.temp for cell in self.cells])[::-1]
 
         for heatSource in self.heatSources:
             heatSource.update()
 
-        for cell in range(len(self.cells)-1,0,-1):
-            selectedCell:cell = self.cells[sortIndex[cell]]
-            # self.highlightCellNeighbors(self.cells[sortIndex[cell]].x, self.cells[sortIndex[cell]].y)
+        for cell in iter(sortIndex):
+            selectedCell:cell = self.cells[cell]
+            self.highlightCellNeighbors(selectedCell.id)
+            self.plotFigure.show()
+
+            plt.pause(1)
+            self.plotAxis.clear()
+
             if selectedCell.id in self.heatSourcesIds:
-                # get the heat source id
                 heatSourceId = self.heatSourcesIds.index(selectedCell.id)
-                # get the heat source
                 heatSource = self.heatSources[heatSourceId]
                 selectedCell.injectHeat(heatSource.power*self.timeStep)
             selectedCell.transferHeat(self.timeStep)
@@ -160,25 +164,34 @@ class room:
         for cell in self.cells:
             temp.append(cell.temp)
         # turn temp into 2d array
-        temp = [temp[i:i+self.width+4] for i in range(0, len(temp), self.width+4)]
+        temp = np.array(temp).reshape(self.width+4, self.height+4)
         return temp
 
-    def plotTempMap(self, axis:plt.Axes=None):
+    def plotTempMap(self):
         temp = self.getTemperatureMap()
-        if axis is None:
-            plt.imshow(temp, cmap='hot', interpolation='nearest')
-        else:
-            axis.imshow(temp, cmap='hot', interpolation='nearest')
+        self.plotAxis.imshow(temp, cmap='hot', interpolation='nearest')
 
-    def highlightCellNeighbors(self, x, y):
-        selectedCell = self.getCell(x, y)
-        trueTemps = [cell.temp for cell in selectedCell.neighbors]
+    def highlightCellNeighbors(self, id):
+        selectedCell = self.cells[id]
+        self.plotTempMap()
         for neighbor in selectedCell.neighbors:
-            neighbor.temp = 100
+            self.plotAxis.scatter(neighbor.x, neighbor.y, 10, "red", marker="o")
+        # add the selected cell in the title
+        self.plotAxis.set_title(f"Cell {selectedCell.id}")
+
+    def highlightCellNeighborsFromXY(self, x, y):
+        return self.highightCellNeighbors(self.getCell(x,y).id)
+
+    def highlightCell(self, id):
+        selectedCell = self.cells[id]
+        trueTemp = selectedCell.temp
+        selectedCell.temp = 100
         self.plotTempMap()
         plt.show()
-        for i in range(len(selectedCell.neighbors)):
-            selectedCell.neighbors[i].temp = trueTemps[i]
+        selectedCell.temp = trueTemp
+
+    def highlightCellFromXY(self, x, y):
+        return self.highightCell(self.getCell(x,y).id)
 
     def drawFeatures(self):
         image = np.zeros((self.width+4, self.height+4, 3))
@@ -217,7 +230,7 @@ def simulate():
     airCapacity = 200 # Joules/Kelvin
     setpoint = 21 # Kelvin
     air = (0.1, airCapacity)
-    timeFigure, timeAxis = plt.subplots()
+    # timeFigure, timeAxis = plt.subplots()
 
     # setpoints = []
     # steadyStatePowers = []
@@ -233,14 +246,12 @@ def simulate():
     sensorCell = testroom.getCell(testroom.width//2+2, 2)
     testroom.addSensor(sensorCell.id, sensorCell.x, sensorCell.y)
     heaterCell = testroom.getCell(testroom.width//2+2, testroom.height//2+2)
-    testroom.addHeatSource(heaterCell.id, heaterCell.x, heaterCell.y, 1000, 10, 0.2, setpoint, testroom.sensors[0])
+    testroom.addHeatSource(heaterCell.id, heaterCell.x, heaterCell.y, 1000, 30, 0.03, setpoint, testroom.sensors[0])
 
     # for i in range(5):
     #     testroom.highlightCellNeighbors(2+i, 0)
 
     # testroom.drawFeatures()
-
-    testroom.saveRoom("room.json")
 
     # totalJoules = []
     temperatureOverTime = []
@@ -254,16 +265,16 @@ def simulate():
         temperatureOverTime.append(testroom.getInnerTemp())
         heaterTemperatureOverTime.append(testroom.heatSources[0].sensor.getTemp())
         heaterPowerOverTime.append(testroom.heatSources[0].power)
-        if i % 10 == 0:
-            temperatureMap.append(testroom.getTemperatureMap())
+        # if i % 10 == 0:
+        #     temperatureMap.append(testroom.getTemperatureMap())
 
 
-    image = plt.imshow(temperatureMap[0], cmap='hot', interpolation='nearest')
-    def update(frame):
-        image.set_data(temperatureMap[frame])
-        return image
-    ani = animation.FuncAnimation(timeFigure, update, frames=range(simulationTime//10), interval=10)
-    plt.show()
+    # image = plt.imshow(temperatureMap[0], cmap='hot', interpolation='nearest')
+    # def update(frame):
+    #     image.set_data(temperatureMap[frame])
+    #     return image
+    # ani = animation.FuncAnimation(timeFigure, update, frames=range(simulationTime//10), interval=10)
+    # plt.show()
 
     # averagedPower = round(np.mean(heaterPowerOverTime[-100:]),2)
     # setpoints.append(setpoint)
@@ -271,12 +282,12 @@ def simulate():
     # print(f"setpoint: {testroom.heatSource.setpoint}K'\tsteady state power: {averagedPower}W")
 
     # plt.plot(totalJoules)
-    plt.plot(np.array(range(simulationTime))*5, temperatureOverTime, label="Room Temperature")
-    plt.plot(np.array(range(simulationTime))*5, heaterTemperatureOverTime, label="Heater Temperature")
-    plt.legend()
-    plt.twinx()
-    plt.plot(np.array(range(simulationTime))*5, heaterPowerOverTime, "--")
-    plt.show()
+    # plt.plot(5*np.array(range(simulationTime)), temperatureOverTime, label="Room Temperature")
+    # plt.plot(5*np.array(range(simulationTime)), heaterTemperatureOverTime, label="sensor Temperature")
+    # plt.legend()
+    # plt.twinx()
+    # plt.plot(5*np.array(range(simulationTime)), heaterPowerOverTime, "--")
+    # plt.show()
 
     # plt.plot(setpoints, steadyStatePowers)
     # plt.xlabel("Setpoint [K]")
