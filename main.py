@@ -62,7 +62,7 @@ class thermometer:
         return self.room.getTemp(self.x, self.y)+random.gauss(0,0.05)
 
 class heater:
-    def __init__(self, x, y, room, power, p, i, setpoint, sensor):
+    def __init__(self, x, y, room, power, p, i, setpoint, sensor, delay=0):
         self.x = x
         self.y = y
         self.room = room
@@ -73,9 +73,21 @@ class heater:
         self.lastError = 0
         self.setpoint = setpoint
         self.sensor = sensor
+        self.delay = delay
+        if delay == 0:
+            self.sensorReadings = None
+        else:
+            self.sensorReadings = [sensor.getTemp()]*delay
+        self.sensorReadingsIndex = 0
+
     
     def update(self):
-        error = self.setpoint - self.sensor.getTemp()
+        if self.delay > 0:
+            error = self.setpoint - self.sensorReadings[self.sensorReadingsIndex]
+            self.sensorReadings[self.sensorReadingsIndex] = self.sensor.getTemp()
+            self.sensorReadingsIndex = (self.sensorReadingsIndex+1)%self.delay
+        else:
+            error = self.setpoint - self.sensor.getTemp()
         self.integral += error * self.room.timeStep
         self.power = self.p*error + self.i*self.integral
         self.power = min(max(self.power, 0),1000)
@@ -122,13 +134,13 @@ class room:
     def getCell(self, x, y):
         return self.cells[x*(self.height+4) + y]
 
-    def addHeatSource(self, id, power, p, i, setpoint, sensor):
+    def addHeatSource(self, id, power, p, i, setpoint, sensor, delay):
         selectedCell = self.cells[id]
         return self.addHeatSourceFromXY(selectedCell.x, selectedCell.y, power, p, i, setpoint, sensor)
 
-    def addHeatSourceFromXY(self, x, y, power, p, i, setpoint, sensor):
+    def addHeatSourceFromXY(self, x, y, power, p, i, setpoint, sensor, delay):
         self.heatSourcesIds.append(self.getCell(x,y).id)
-        self.heatSources.append(heater(x, y, self, power, p, i, setpoint, sensor))
+        self.heatSources.append(heater(x, y, self, power, p, i, setpoint, sensor, delay))
         return self.heatSources[-1]
 
     def addSensor(self, id):
@@ -294,41 +306,25 @@ class room:
 
 def simulate():
 
-    # airCapacity = 20.79*88.08 # Joules/Kelvin
-    airCapacity = 200 # Joules/Kelvin
+    airCapacity = 20.79*88.08 # Joules/Kelvin
     setpoint = 30 # Kelvin
+    timeStep = 10 # in seconds
     air = (0.1, airCapacity)
 
-    # setpoints = []
-    # steadyStatePowers = []
-    # for setpoint in range(0,101,5):
 
-    timeStep = 10 # in seconds
-    testroom = room(15, 5, timeStep)
-    testroom.initCells(20, *air, 3, 100, 0, *air)
+    testroom = room(7, 5, timeStep)
+    testroom.initCells(setpoint, *air, 3, 100, 0, *air)
 
     testSensor = testroom.addSensorFromXY(testroom.width//2+2, 2)
-    testroom.addHeatSourceFromXY(testroom.width//2+2, testroom.height//2+2, 1000, 10, 0.01, setpoint, testSensor)
+    testroom.addHeatSourceFromXY(2, testroom.height//2+2, 1000, 10, 0.01, setpoint, testSensor, 0)
+    testroom.addHeatSourceFromXY(testroom.width+1, testroom.height//2+2, 1000, 10, 0.01, setpoint, testSensor, 0)
     
-    testroom.labelCells()
+    # testroom.labelCells()
     testroom.drawFeatures()
     plt.show(block=False)
     plt.pause(0.1)
 
 
-    # for cell in testroom.cells:
-    #     points = testroom.highlightCellNeighbors(cell.id)
-    #     plt.pause(0.1)
-    #     for point in points:
-    #         point.remove()
-
-
-    # for i in range(5):
-    #     testroom.highlightCellNeighbors(2+i, 0)
-
-    # testroom.drawFeatures()
-
-    # totalJoules = []
     temperatureOverTime = []
     heaterTemperatureOverTime = []
     heaterPowerOverTime = []
@@ -336,7 +332,6 @@ def simulate():
     simulationTime = 60*10
     for i in range(simulationTime):
         testroom.transferHeat()
-        # totalJoules.append(testroom.getSummedTemp())
         temperatureOverTime.append(testroom.getInnerTemp())
         heaterTemperatureOverTime.append(testroom.heatSources[0].sensor.getTemp())
         heaterPowerOverTime.append(testroom.heatSources[0].power)
@@ -351,29 +346,17 @@ def simulate():
         return image
     ani = animation.FuncAnimation(imFigure, update, frames=range(simulationTime//10), interval=10)
 
-    # averagedPower = round(np.mean(heaterPowerOverTime[-100:]),2)
-    # setpoints.append(setpoint)
-    # steadyStatePowers.append(averagedPower)
-    # print(f"setpoint: {testroom.heatSource.setpoint}K'\tsteady state power: {averagedPower}W")
-
-    # plt.plot(totalJoules)
     timeFigure, timeAxis = plt.subplots()
     timeAxis.plot(5*np.array(range(simulationTime)), temperatureOverTime, label="Room Temperature")
     timeAxis.plot(5*np.array(range(simulationTime)), heaterTemperatureOverTime, label="sensor Temperature")
     timeAxis.legend()
     timeAxisPower = timeAxis.twinx()
-    timeAxisPower.plot(5*np.array(range(simulationTime)), heaterPowerOverTime, "--")
+    timeAxisPower.plot(5*np.array(range(simulationTime)), heaterPowerOverTime, "--", label="Heater Power")
+    timeAxisPower.set_ylabel("Heater Power [W]")
+    timeAxisPower.legend(loc="upper right")
+    timeAxis.set_ylabel("Temperature [C']")
+    timeAxis.set_xlabel("Time [s]")
     plt.show()
-
-    # plt.plot(setpoints, steadyStatePowers)
-    # plt.xlabel("Setpoint [K]")
-    # plt.ylabel("Steady State Power [W]")
-    # plt.show()
-    
-    # with open("data.csv", "w") as f:
-    #     f.write("setpoint,steady state power\n")
-    #     for i in range(len(setpoints)):
-    #         f.write(f"{setpoints[i]};{steadyStatePowers[i]}\n".replace(".",","))
 
 def main():
     simulate()
